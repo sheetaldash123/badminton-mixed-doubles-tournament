@@ -2,6 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 
 const STORAGE_KEY = "badminton-mixed-doubles-cup-v1";
 
+// For the current GitHub Pages/static version.
+// Set VITE_ADMIN_PASSWORD in your build environment.
+// NOTE: Vite embeds VITE_* values in the browser bundle, so this is
+// a UI edit-lock only, not a secure authentication mechanism.
+const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
+
 const emptyPlayers = Array.from({ length: 5 }, (_, i) => ({
   id: i + 1,
   name: ""
@@ -239,6 +245,10 @@ function App() {
   }, [state]);
 
   const [selectedTeamId, setSelectedTeamId] = useState(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordError, setPasswordError] = useState("");
 
   const standings = useMemo(
     () => getStandings(state.teams, state.matches),
@@ -248,9 +258,43 @@ function App() {
   const completedLeague = state.matches.filter((m) => m.status === "completed").length;
   const leagueComplete = state.matches.length === 10 && completedLeague === 10;
 
-  const updateState = (patch) => setState((prev) => ({ ...prev, ...patch }));
+  const requestEditMode = () => {
+    setPasswordInput("");
+    setPasswordError("");
+    setShowPasswordModal(true);
+  };
+
+  const unlockEditMode = () => {
+    if (!ADMIN_PASSWORD) {
+      setPasswordError("Admin password is not configured.");
+      return;
+    }
+
+    if (passwordInput === ADMIN_PASSWORD) {
+      setIsEditMode(true);
+      setShowPasswordModal(false);
+      setPasswordInput("");
+      setPasswordError("");
+      return;
+    }
+
+    setPasswordError("Incorrect password.");
+  };
+
+  const lockEditMode = () => {
+    setIsEditMode(false);
+    setPasswordInput("");
+    setPasswordError("");
+    setShowPasswordModal(false);
+  };
+
+  const updateState = (patch) => {
+    if (!isEditMode) return;
+    setState((prev) => ({ ...prev, ...patch }));
+  };
 
   const updatePlayer = (group, index, name) => {
+    if (!isEditMode) return;
     setState((prev) => ({
       ...prev,
       [group]: prev[group].map((p, i) => (i === index ? { ...p, name } : p))
@@ -258,6 +302,7 @@ function App() {
   };
 
   const resetTournament = () => {
+    if (!isEditMode) return;
     if (!window.confirm("Reset the entire tournament? All scores and pairings will be deleted.")) return;
     setState(clone(initialState));
     localStorage.removeItem(STORAGE_KEY);
@@ -269,6 +314,7 @@ function App() {
     new Set([...state.boys, ...state.girls].map((p) => p.name.trim().toLowerCase())).size === 10;
 
   const pairTeams = () => {
+    if (!isEditMode) return;
     if (!allPlayersValid) {
       alert("Enter 10 unique player names first.");
       return;
@@ -277,6 +323,7 @@ function App() {
   };
 
   const startTournament = () => {
+    if (!isEditMode) return;
     if (state.teams.length !== 5) return;
     updateState({
       stage: "league",
@@ -286,6 +333,7 @@ function App() {
   };
 
   const submitLeagueResult = (matchId, result) => {
+    if (!isEditMode) return;
     if (!isResultValid(result, state.format)) {
       alert(
         state.format === "single"
@@ -306,6 +354,7 @@ function App() {
   };
 
   const editLeagueResult = (matchId) => {
+    if (!isEditMode) return;
     setState((prev) => ({
       ...prev,
       matches: prev.matches.map((m) =>
@@ -315,6 +364,7 @@ function App() {
   };
 
   const submitPlayoffResult = (slot, result) => {
+    if (!isEditMode) return;
     if (!isResultValid(result, state.format)) {
       alert(
         state.format === "single"
@@ -337,6 +387,7 @@ function App() {
   };
 
   const editPlayoffResult = (slot) => {
+    if (!isEditMode) return;
     setState((prev) => ({
       ...prev,
       playoffs: {
@@ -403,7 +454,14 @@ function App() {
               Playoffs →
             </button>
           )}
-          <button className="ghost-btn" onClick={resetTournament}>Reset</button>
+          {isEditMode ? (
+            <button className="ghost-btn" onClick={lockEditMode}>🔒 Lock Editing</button>
+          ) : (
+            <button className="ghost-btn" onClick={requestEditMode}>🔑 Admin Edit</button>
+          )}
+          {isEditMode && (
+            <button className="ghost-btn" onClick={resetTournament}>Reset</button>
+          )}
         </div>
       </header>
 
@@ -437,6 +495,7 @@ function App() {
             pairTeams={pairTeams}
             startTournament={startTournament}
             allPlayersValid={allPlayersValid}
+            canEdit={isEditMode}
           />
         )}
 
@@ -451,6 +510,7 @@ function App() {
             leagueComplete={leagueComplete}
             selectedTeamId={selectedTeamId}
             setSelectedTeamId={setSelectedTeamId}
+            canEdit={isEditMode}
           />
         )}
 
@@ -470,8 +530,9 @@ function App() {
             playoffTeams={playoffTeams}
             onTeamClick={(teamId) => {
               setSelectedTeamId(teamId);
-              updateState({ stage: "league" });
+              setState((prev) => ({ ...prev, stage: "league" }));
             }}
+            canEdit={isEditMode}
           />
         )}
       </main>
@@ -479,13 +540,108 @@ function App() {
       <footer>
         <span>{formatLabel}</span>
         <span>•</span>
-        <span>Scores saved automatically on this device</span>
+        <span>{isEditMode ? "EDIT MODE • Changes saved automatically on this device" : "VIEW ONLY • Admin access required to edit"}</span>
       </footer>
+
+      {showPasswordModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.62)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: 20
+          }}
+          onClick={() => setShowPasswordModal(false)}
+        >
+          <div
+            className="card"
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              padding: 28,
+              boxSizing: "border-box"
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="eyebrow">ADMIN ACCESS</div>
+            <h2 style={{ marginTop: 8 }}>Unlock editing</h2>
+            <p className="muted">
+              The tournament is currently view-only. Enter the admin password to edit players, teams and scores.
+            </p>
+
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => {
+                setPasswordInput(e.target.value);
+                setPasswordError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") unlockEditMode();
+              }}
+              placeholder="Admin password"
+              autoFocus
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "12px 14px",
+                marginTop: 12,
+                borderRadius: 10,
+                border: "1px solid #ccc",
+                fontSize: 16
+              }}
+            />
+
+            {passwordError && (
+              <div style={{ color: "#c62828", marginTop: 8, fontSize: 14 }}>
+                {passwordError}
+              </div>
+            )}
+
+        <div
+          className="actions"
+          style={{
+            marginTop: 18,
+            display: "flex",
+            gap: 10,
+          }}
+        >
+          <button
+            className="primary-btn"
+            onClick={() => setShowPasswordModal(false)}
+            style={{
+              flex: 1,
+              width: "50%",
+              boxSizing: "border-box",
+            }}
+          >
+            Cancel
+          </button>
+
+          <button
+            className="primary-btn"
+            onClick={unlockEditMode}
+            style={{
+              flex: 1,
+              width: "50%",
+              boxSizing: "border-box",
+            }}
+          >
+            Unlock Editing
+          </button>
+        </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, allPlayersValid }) {
+function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, allPlayersValid, canEdit }) {
   return (
     <section className="page">
       <div className="hero">
@@ -503,6 +659,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
           players={state.boys}
           group="boys"
           updatePlayer={updatePlayer}
+          canEdit={canEdit}
         />
         <PlayerColumn
           title="Girls"
@@ -510,6 +667,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
           players={state.girls}
           group="girls"
           updatePlayer={updatePlayer}
+          canEdit={canEdit}
         />
       </div>
 
@@ -522,12 +680,14 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
           <button
             className={state.format === "single" ? "selected" : ""}
             onClick={() => updateState({ format: "single" })}
+            disabled={!canEdit}
           >
             Single Game
           </button>
           <button
             className={state.format === "bo3" ? "selected" : ""}
             onClick={() => updateState({ format: "bo3" })}
+            disabled={!canEdit}
           >
             Best of 3
           </button>
@@ -535,7 +695,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
       </div>
 
       <div className="actions">
-        <button className="primary-btn" onClick={pairTeams}>
+        <button className="primary-btn" onClick={pairTeams} disabled={!canEdit}>
           🎲 Randomly Pair Teams
         </button>
       </div>
@@ -547,7 +707,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
               <div className="card-title">Your teams</div>
               <div className="muted">Shuffle until everyone is happy, then start.</div>
             </div>
-            <button className="secondary-btn" onClick={pairTeams}>↻ Shuffle Again</button>
+            <button className="secondary-btn" onClick={pairTeams} disabled={!canEdit}>↻ Shuffle Again</button>
           </div>
 
           <div className="teams-grid">
@@ -566,7 +726,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
 
           <button
             className="primary-btn full"
-            disabled={!allPlayersValid}
+            disabled={!allPlayersValid || !canEdit}
             onClick={startTournament}
           >
             Start Round Robin →
@@ -583,7 +743,7 @@ function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, a
   );
 }
 
-function PlayerColumn({ title, icon, players, group, updatePlayer }) {
+function PlayerColumn({ title, icon, players, group, updatePlayer, canEdit }) {
   return (
     <div className="card player-card">
       <div className="section-heading">
@@ -598,6 +758,7 @@ function PlayerColumn({ title, icon, players, group, updatePlayer }) {
             onChange={(e) => updatePlayer(group, index, e.target.value)}
             placeholder={`${title.slice(0, -1)} ${index + 1}`}
             maxLength={24}
+            disabled={!canEdit}
           />
         </label>
       ))}
@@ -614,7 +775,8 @@ function League({
   completedLeague,
   leagueComplete,
   selectedTeamId,
-  setSelectedTeamId
+  setSelectedTeamId,
+  canEdit
 }) {
   const selectedTeam = selectedTeamId ? teamById(state.teams, selectedTeamId) : null;
 
@@ -667,6 +829,7 @@ function League({
                   format={state.format}
                   onSubmit={submitLeagueResult}
                   onEdit={editLeagueResult}
+                  canEdit={canEdit}
                 />
               ))}
             </div>
@@ -831,7 +994,7 @@ function Standings({ teams, standings, playoffView = false, onTeamClick }) {
   );
 }
 
-function MatchCard({ match, teams, format, onSubmit, onEdit }) {
+function MatchCard({ match, teams, format, onSubmit, onEdit, canEdit = false }) {
   const [result, setResult] = useState(() => match.result || createBlankResult(match, format));
 
   useEffect(() => {
@@ -868,9 +1031,9 @@ function MatchCard({ match, teams, format, onSubmit, onEdit }) {
 
       {format === "single" ? (
         <div className="single-score">
-          <TeamScore team={teamA} score={result.scoreA} side="scoreA" onChange={changeSingle} winner={winner === teamA?.id} />
+          <TeamScore team={teamA} score={result.scoreA} side="scoreA" onChange={changeSingle} winner={winner === teamA?.id} canEdit={canEdit} />
           <div className="vs">VS</div>
-          <TeamScore team={teamB} score={result.scoreB} side="scoreB" onChange={changeSingle} winner={winner === teamB?.id} />
+          <TeamScore team={teamB} score={result.scoreB} side="scoreB" onChange={changeSingle} winner={winner === teamB?.id} canEdit={canEdit} />
         </div>
       ) : (
         <div className="bo3">
@@ -882,9 +1045,9 @@ function MatchCard({ match, teams, format, onSubmit, onEdit }) {
               <div className="bo3-team">{team.name}<small>{team.boy} + {team.girl}</small></div>
               {[0, 1, 2].map((gameIndex) => (
                 <div className="mini-score" key={gameIndex}>
-                  <button onClick={() => changeGame(gameIndex, side, -1)}>−</button>
+                  <button disabled={!canEdit} onClick={() => changeGame(gameIndex, side, -1)}>−</button>
                   <strong>{result.games[gameIndex][side]}</strong>
-                  <button onClick={() => changeGame(gameIndex, side, 1)}>+</button>
+                  <button disabled={!canEdit} onClick={() => changeGame(gameIndex, side, 1)}>+</button>
                 </div>
               ))}
             </div>
@@ -896,7 +1059,7 @@ function MatchCard({ match, teams, format, onSubmit, onEdit }) {
         <div className="result-bar">
           <span><strong>{teamLabel(teams, winner)}</strong> won</span>
           <span>{getScoreLabel(match.result)}</span>
-          <button className="text-btn" onClick={() => onEdit(match.id)}>Edit result</button>
+          {canEdit && <button className="text-btn" onClick={() => onEdit(match.id)}>Edit result</button>}
         </div>
       ) : (
         <button className="submit-btn" onClick={() => onSubmit(match.id, result)}>
@@ -907,7 +1070,7 @@ function MatchCard({ match, teams, format, onSubmit, onEdit }) {
   );
 }
 
-function TeamScore({ team, score, side, onChange, winner }) {
+function TeamScore({ team, score, side, onChange, winner, canEdit }) {
   return (
     <div className={`score-team ${winner ? "winner" : ""}`}>
       <div className="score-team-name">
@@ -915,9 +1078,9 @@ function TeamScore({ team, score, side, onChange, winner }) {
         <span>{team.boy} + {team.girl}</span>
       </div>
       <div className="score-controls">
-        <button onClick={() => onChange(side, -1)}>−</button>
+        <button disabled={!canEdit} onClick={() => onChange(side, -1)}>−</button>
         <strong>{score}</strong>
-        <button onClick={() => onChange(side, 1)}>+</button>
+        <button disabled={!canEdit} onClick={() => onChange(side, 1)}>+</button>
       </div>
     </div>
   );
@@ -936,7 +1099,8 @@ function Playoffs({
   fifthTeam,
   champion,
   playoffTeams,
-  onTeamClick
+  onTeamClick,
+  canEdit
 }) {
   const complete = Boolean(champion);
 
@@ -972,6 +1136,7 @@ function Playoffs({
             format={state.format}
             onSubmit={submitPlayoffResult}
             onEdit={editPlayoffResult}
+            canEdit={canEdit}
             disabled={!q1.teamA || !q1.teamB}
           />
         </div>
@@ -987,6 +1152,7 @@ function Playoffs({
             format={state.format}
             onSubmit={submitPlayoffResult}
             onEdit={editPlayoffResult}
+            canEdit={canEdit}
             disabled={!eliminator.teamA || !eliminator.teamB}
           />
         </div>
@@ -1003,6 +1169,7 @@ function Playoffs({
               format={state.format}
               onSubmit={submitPlayoffResult}
               onEdit={editPlayoffResult}
+              canEdit={canEdit}
             />
           ) : (
             <div className="locked-card">🔒 Waiting for Q1 + Eliminator</div>
@@ -1021,6 +1188,7 @@ function Playoffs({
               format={state.format}
               onSubmit={submitPlayoffResult}
               onEdit={editPlayoffResult}
+              canEdit={canEdit}
             />
           ) : (
             <div className="locked-card">🔒 Waiting for Qualifier 2</div>
@@ -1046,7 +1214,7 @@ function Playoffs({
   );
 }
 
-function PlayoffMatch({ slot, match, playoff, teams, format, onSubmit, onEdit, disabled }) {
+function PlayoffMatch({ slot, match, playoff, teams, format, onSubmit, onEdit, disabled, canEdit }) {
   if (disabled) return <div className="locked-card">Waiting for league standings</div>;
 
   const baseMatch = {
@@ -1066,6 +1234,7 @@ function PlayoffMatch({ slot, match, playoff, teams, format, onSubmit, onEdit, d
       format={format}
       onSubmit={(id, result) => onSubmit(slot, result)}
       onEdit={() => onEdit(slot)}
+      canEdit={canEdit}
     />
   );
 }
