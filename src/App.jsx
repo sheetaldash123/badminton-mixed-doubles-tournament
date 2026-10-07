@@ -1,0 +1,1098 @@
+import React, { useEffect, useMemo, useState } from "react";
+
+const STORAGE_KEY = "badminton-mixed-doubles-cup-v1";
+
+const emptyPlayers = Array.from({ length: 5 }, (_, i) => ({
+  id: i + 1,
+  name: ""
+}));
+
+const initialState = {
+  stage: "setup",
+  boys: emptyPlayers,
+  girls: emptyPlayers.map((p) => ({ ...p })),
+  teams: [],
+  format: "single",
+  matches: [],
+  playoffs: {
+    q1: null,
+    eliminator: null,
+    q2: null,
+    final: null
+  }
+};
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function shuffle(array) {
+  const a = [...array];
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function makeTeams(boys, girls) {
+  const shuffledBoys = shuffle(boys);
+  const shuffledGirls = shuffle(girls);
+  return shuffledBoys.map((boy, i) => ({
+    id: `T${i + 1}`,
+    name: `Team ${i + 1}`,
+    boy: boy.name.trim(),
+    girl: shuffledGirls[i].name.trim()
+  }));
+}
+
+function makeRoundRobinFixtures(teams) {
+  const slots = [...teams.map((t) => t.id), null];
+  const rounds = [];
+
+  for (let round = 0; round < 5; round += 1) {
+    const matches = [];
+    for (let i = 0; i < slots.length / 2; i += 1) {
+      const a = slots[i];
+      const b = slots[slots.length - 1 - i];
+      if (a !== null && b !== null) {
+        matches.push({
+          id: `L${round + 1}-${matches.length + 1}`,
+          round: round + 1,
+          teamA: a,
+          teamB: b,
+          status: "pending",
+          result: null
+        });
+      }
+    }
+    rounds.push(matches);
+    const fixed = slots[0];
+    const rotating = slots.slice(1);
+    rotating.unshift(rotating.pop());
+    slots.splice(0, slots.length, fixed, ...rotating);
+  }
+
+  return rounds.flat();
+}
+
+function teamById(teams, id) {
+  return teams.find((t) => t.id === id);
+}
+
+function teamLabel(teams, id) {
+  const team = teamById(teams, id);
+  return team ? team.name : "TBD";
+}
+
+function getWinner(result) {
+  if (!result) return null;
+  if (result.games) {
+    const a = result.games.filter((g) => g.a > g.b).length;
+    const b = result.games.filter((g) => g.b > g.a).length;
+    if (a === b) return null;
+    return a > b ? result.teamA : result.teamB;
+  }
+  if (result.scoreA === result.scoreB) return null;
+  return result.scoreA > result.scoreB ? result.teamA : result.teamB;
+}
+
+function getScoreLabel(result) {
+  if (!result) return "";
+  if (result.games) {
+    return result.games
+      .filter((g) => g.a !== 0 || g.b !== 0)
+      .map((g) => `${g.a}-${g.b}`)
+      .join(", ");
+  }
+  return `${result.scoreA}-${result.scoreB}`;
+}
+
+function getMatchMargin(result) {
+  if (!result) return 0;
+  if (result.games) {
+    return result.games.reduce((sum, g) => sum + Math.abs(g.a - g.b), 0);
+  }
+  return Math.abs(result.scoreA - result.scoreB);
+}
+
+function getStandings(teams, matches) {
+  const table = teams.map((team) => ({
+    teamId: team.id,
+    played: 0,
+    wins: 0,
+    losses: 0,
+    pf: 0,
+    pa: 0,
+    margin: 0
+  }));
+
+  const map = Object.fromEntries(table.map((row) => [row.teamId, row]));
+
+  matches
+    .filter((m) => m.status === "completed" && m.result)
+    .forEach((m) => {
+      const r = m.result;
+      const a = map[r.teamA];
+      const b = map[r.teamB];
+      if (!a || !b) return;
+
+      a.played += 1;
+      b.played += 1;
+
+      if (r.games) {
+        r.games.forEach((g) => {
+          a.pf += g.a;
+          a.pa += g.b;
+          b.pf += g.b;
+          b.pa += g.a;
+        });
+      } else {
+        a.pf += r.scoreA;
+        a.pa += r.scoreB;
+        b.pf += r.scoreB;
+        b.pa += r.scoreA;
+      }
+
+      const winner = getWinner(r);
+      if (winner === a.teamId) {
+        a.wins += 1;
+        b.losses += 1;
+      } else if (winner === b.teamId) {
+        b.wins += 1;
+        a.losses += 1;
+      }
+    });
+
+  table.forEach((r) => {
+    r.margin = r.pf - r.pa;
+  });
+
+  return table
+    .sort((a, b) =>
+      b.wins - a.wins ||
+      b.margin - a.margin ||
+      b.pf - a.pf ||
+      a.teamId.localeCompare(b.teamId)
+    )
+    .map((row, index) => ({ ...row, position: index + 1 }));
+}
+
+function isResultValid(result, format) {
+  if (format === "single") {
+    return Number.isInteger(result.scoreA) &&
+      Number.isInteger(result.scoreB) &&
+      result.scoreA >= 0 &&
+      result.scoreB >= 0 &&
+      result.scoreA !== result.scoreB;
+  }
+
+  const games = result.games;
+  if (!games || games.length !== 3) return false;
+
+  const decided = games.filter((g) => g.a !== g.b && (g.a !== 0 || g.b !== 0));
+  if (decided.length < 2) return false;
+
+  const winsA = games.filter((g) => g.a > g.b).length;
+  const winsB = games.filter((g) => g.b > g.a).length;
+
+  if (winsA !== 2 && winsB !== 2) return false;
+  if (winsA === 2 && winsB > 1) return false;
+  if (winsB === 2 && winsA > 1) return false;
+
+  return games.every((g) => g.a >= 0 && g.b >= 0 && g.a !== g.b);
+}
+
+function createBlankResult(match, format) {
+  if (format === "single") {
+    return {
+      teamA: match.teamA,
+      teamB: match.teamB,
+      scoreA: 0,
+      scoreB: 0
+    };
+  }
+
+  return {
+    teamA: match.teamA,
+    teamB: match.teamB,
+    games: [
+      { a: 0, b: 0 },
+      { a: 0, b: 0 },
+      { a: 0, b: 0 }
+    ]
+  };
+}
+
+function App() {
+  const [state, setState] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : clone(initialState);
+    } catch {
+      return clone(initialState);
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
+
+  const [selectedTeamId, setSelectedTeamId] = useState(null);
+
+  const standings = useMemo(
+    () => getStandings(state.teams, state.matches),
+    [state.teams, state.matches]
+  );
+
+  const completedLeague = state.matches.filter((m) => m.status === "completed").length;
+  const leagueComplete = state.matches.length === 10 && completedLeague === 10;
+
+  const updateState = (patch) => setState((prev) => ({ ...prev, ...patch }));
+
+  const updatePlayer = (group, index, name) => {
+    setState((prev) => ({
+      ...prev,
+      [group]: prev[group].map((p, i) => (i === index ? { ...p, name } : p))
+    }));
+  };
+
+  const resetTournament = () => {
+    if (!window.confirm("Reset the entire tournament? All scores and pairings will be deleted.")) return;
+    setState(clone(initialState));
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  const allPlayersValid =
+    state.boys.every((p) => p.name.trim()) &&
+    state.girls.every((p) => p.name.trim()) &&
+    new Set([...state.boys, ...state.girls].map((p) => p.name.trim().toLowerCase())).size === 10;
+
+  const pairTeams = () => {
+    if (!allPlayersValid) {
+      alert("Enter 10 unique player names first.");
+      return;
+    }
+    updateState({ teams: makeTeams(state.boys, state.girls) });
+  };
+
+  const startTournament = () => {
+    if (state.teams.length !== 5) return;
+    updateState({
+      stage: "league",
+      matches: makeRoundRobinFixtures(state.teams),
+      playoffs: clone(initialState.playoffs)
+    });
+  };
+
+  const submitLeagueResult = (matchId, result) => {
+    if (!isResultValid(result, state.format)) {
+      alert(
+        state.format === "single"
+          ? "Enter two different scores before submitting."
+          : "For Best of 3, enter three decided games and make sure one team wins 2 games."
+      );
+      return;
+    }
+
+    setState((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) =>
+        m.id === matchId
+          ? { ...m, status: "completed", result: clone(result) }
+          : m
+      )
+    }));
+  };
+
+  const editLeagueResult = (matchId) => {
+    setState((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) =>
+        m.id === matchId ? { ...m, status: "pending" } : m
+      )
+    }));
+  };
+
+  const submitPlayoffResult = (slot, result) => {
+    if (!isResultValid(result, state.format)) {
+      alert(
+        state.format === "single"
+          ? "Enter two different scores before submitting."
+          : "For Best of 3, enter three decided games and make sure one team wins 2 games."
+      );
+      return;
+    }
+
+    setState((prev) => ({
+      ...prev,
+      playoffs: {
+        ...prev.playoffs,
+        [slot]: {
+          status: "completed",
+          result: clone(result)
+        }
+      }
+    }));
+  };
+
+  const editPlayoffResult = (slot) => {
+    setState((prev) => ({
+      ...prev,
+      playoffs: {
+        ...prev.playoffs,
+        [slot]: null
+      }
+    }));
+  };
+
+  useEffect(() => {
+    if (!leagueComplete || state.stage === "playoffs" || state.stage === "complete") return;
+    setState((prev) => ({ ...prev, stage: "playoffs" }));
+  }, [leagueComplete, state.stage]);
+
+  const playoffTeams = standings.slice(0, 4).map((row) => row.teamId);
+  const fifthTeam = standings[4]?.teamId;
+
+  const q1 = {
+    teamA: playoffTeams[0],
+    teamB: playoffTeams[1]
+  };
+  const eliminator = {
+    teamA: playoffTeams[2],
+    teamB: playoffTeams[3]
+  };
+
+  const q1Winner = state.playoffs.q1?.result ? getWinner(state.playoffs.q1.result) : null;
+  const q1Loser = q1Winner ? (q1Winner === q1.teamA ? q1.teamB : q1.teamA) : null;
+  const elimWinner = state.playoffs.eliminator?.result
+    ? getWinner(state.playoffs.eliminator.result)
+    : null;
+
+  const q2 = q1Loser && elimWinner
+    ? { teamA: q1Loser, teamB: elimWinner }
+    : null;
+
+  const q2Winner = state.playoffs.q2?.result ? getWinner(state.playoffs.q2.result) : null;
+  const final = q1Winner && q2Winner
+    ? { teamA: q1Winner, teamB: q2Winner }
+    : null;
+
+  const champion = state.playoffs.final?.result
+    ? getWinner(state.playoffs.final.result)
+    : null;
+
+  const formatLabel = state.format === "single" ? "Single Game" : "Best of 3";
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <div className="eyebrow">BADMINTON • MIXED DOUBLES</div>
+          <h1>The K-EEDA Mixed Doubles Cup <span>🏸</span></h1>
+        </div>
+        <div className="topbar-actions">
+          {state.stage === "playoffs" && leagueComplete && (
+            <button
+              className="ghost-btn"
+              onClick={() => {
+                setSelectedTeamId(null);
+                updateState({ stage: "league" });
+              }}
+            >
+              ← League Stage
+            </button>
+          )}
+          {state.stage === "league" && leagueComplete && (
+            <button
+              className="ghost-btn"
+              onClick={() => {
+                setSelectedTeamId(null);
+                updateState({ stage: "playoffs" });
+              }}
+            >
+              Playoffs →
+            </button>
+          )}
+          <button className="ghost-btn" onClick={resetTournament}>Reset</button>
+        </div>
+      </header>
+
+      <main>
+        <div className="progress">
+          <div className={state.stage === "setup" ? "progress-step active" : "progress-step"}>
+            <span>1</span> Setup
+          </div>
+          <button
+            className={(state.stage === "league" ? "progress-step active" : "progress-step") + (leagueComplete ? " clickable" : "")}
+            onClick={() => {
+              if (leagueComplete) {
+                setSelectedTeamId(null);
+                updateState({ stage: "league" });
+              }
+            }}
+            disabled={!leagueComplete && state.stage !== "league"}
+          >
+            <span>2</span> League Stage
+          </button>
+          <button
+            className={(state.stage === "playoffs" || state.stage === "complete" ? "progress-step active" : "progress-step") + (leagueComplete ? " clickable" : "")}
+            onClick={() => {
+              if (leagueComplete) {
+                setSelectedTeamId(null);
+                updateState({ stage: "playoffs" });
+              }
+            }}
+            disabled={!leagueComplete}
+          >
+            <span>3</span> Playoffs
+          </button>
+        </div>
+
+        {state.stage === "setup" && (
+          <Setup
+            state={state}
+            updatePlayer={updatePlayer}
+            updateState={updateState}
+            pairTeams={pairTeams}
+            startTournament={startTournament}
+            allPlayersValid={allPlayersValid}
+          />
+        )}
+
+        {state.stage === "league" && (
+          <League
+            state={state}
+            standings={standings}
+            submitLeagueResult={submitLeagueResult}
+            editLeagueResult={editLeagueResult}
+            formatLabel={formatLabel}
+            completedLeague={completedLeague}
+            leagueComplete={leagueComplete}
+            selectedTeamId={selectedTeamId}
+            setSelectedTeamId={setSelectedTeamId}
+          />
+        )}
+
+        {(state.stage === "playoffs" || state.stage === "complete") && (
+          <Playoffs
+            state={state}
+            standings={standings}
+            submitPlayoffResult={submitPlayoffResult}
+            editPlayoffResult={editPlayoffResult}
+            formatLabel={formatLabel}
+            q1={q1}
+            eliminator={eliminator}
+            q2={q2}
+            final={final}
+            fifthTeam={fifthTeam}
+            champion={champion}
+            playoffTeams={playoffTeams}
+            onTeamClick={(teamId) => {
+              setSelectedTeamId(teamId);
+              updateState({ stage: "league" });
+            }}
+          />
+        )}
+      </main>
+
+      <footer>
+        <span>{formatLabel}</span>
+        <span>•</span>
+        <span>Scores saved automatically on this device</span>
+      </footer>
+    </div>
+  );
+}
+
+function Setup({ state, updatePlayer, updateState, pairTeams, startTournament, allPlayersValid }) {
+  return (
+    <section className="page">
+      <div className="hero">
+        <div>
+          <div className="pill">10 PLAYERS • 5 TEAMS</div>
+          <h2>Set up your tournament.</h2>
+          <p>Enter 5 boys and 5 girls. We’ll randomly create the mixed doubles teams.</p>
+        </div>
+      </div>
+
+      <div className="setup-grid">
+        <PlayerColumn
+          title="Boys"
+          icon="♂"
+          players={state.boys}
+          group="boys"
+          updatePlayer={updatePlayer}
+        />
+        <PlayerColumn
+          title="Girls"
+          icon="♀"
+          players={state.girls}
+          group="girls"
+          updatePlayer={updatePlayer}
+        />
+      </div>
+
+      <div className="card format-card">
+        <div>
+          <div className="card-title">Match format</div>
+          <div className="muted">This applies to every Round Robin and playoff fixture.</div>
+        </div>
+        <div className="segmented">
+          <button
+            className={state.format === "single" ? "selected" : ""}
+            onClick={() => updateState({ format: "single" })}
+          >
+            Single Game
+          </button>
+          <button
+            className={state.format === "bo3" ? "selected" : ""}
+            onClick={() => updateState({ format: "bo3" })}
+          >
+            Best of 3
+          </button>
+        </div>
+      </div>
+
+      <div className="actions">
+        <button className="primary-btn" onClick={pairTeams}>
+          🎲 Randomly Pair Teams
+        </button>
+      </div>
+
+      {state.teams.length === 5 && (
+        <div className="card teams-card">
+          <div className="section-heading">
+            <div>
+              <div className="card-title">Your teams</div>
+              <div className="muted">Shuffle until everyone is happy, then start.</div>
+            </div>
+            <button className="secondary-btn" onClick={pairTeams}>↻ Shuffle Again</button>
+          </div>
+
+          <div className="teams-grid">
+            {state.teams.map((team, index) => (
+              <div className="team-card" key={team.id}>
+                <div className="team-number">0{index + 1}</div>
+                <div className="team-names">
+                  <strong>{team.name}</strong>
+                  <span>{team.boy}</span>
+                  <span className="plus">+</span>
+                  <span>{team.girl}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            className="primary-btn full"
+            disabled={!allPlayersValid}
+            onClick={startTournament}
+          >
+            Start Round Robin →
+          </button>
+        </div>
+      )}
+
+      <div className="info-row">
+        <div>🏆 <strong>10 fixtures</strong><span>Every team plays the other 4 teams once.</span></div>
+        <div>📊 <strong>Live table</strong><span>Standings update only after results are submitted.</span></div>
+        <div>🔥 <strong>Playoffs</strong><span>Top 4 teams continue after the league.</span></div>
+      </div>
+    </section>
+  );
+}
+
+function PlayerColumn({ title, icon, players, group, updatePlayer }) {
+  return (
+    <div className="card player-card">
+      <div className="section-heading">
+        <div className="player-title"><span className="gender-icon">{icon}</span>{title}</div>
+        <span className="count-badge">5</span>
+      </div>
+      {players.map((player, index) => (
+        <label className="player-input" key={player.id}>
+          <span>{index + 1}</span>
+          <input
+            value={player.name}
+            onChange={(e) => updatePlayer(group, index, e.target.value)}
+            placeholder={`${title.slice(0, -1)} ${index + 1}`}
+            maxLength={24}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function League({
+  state,
+  standings,
+  submitLeagueResult,
+  editLeagueResult,
+  formatLabel,
+  completedLeague,
+  leagueComplete,
+  selectedTeamId,
+  setSelectedTeamId
+}) {
+  const selectedTeam = selectedTeamId ? teamById(state.teams, selectedTeamId) : null;
+
+  if (selectedTeam) {
+    return (
+      <TeamLeagueRecord
+        team={selectedTeam}
+        teams={state.teams}
+        matches={state.matches}
+        formatLabel={formatLabel}
+        onBack={() => setSelectedTeamId(null)}
+      />
+    );
+  }
+
+  return (
+    <section className="page">
+      <div className="page-header">
+        <div>
+          <div className="pill">ROUND ROBIN</div>
+          <h2>League stage</h2>
+          <p>{completedLeague}/10 fixtures completed • {formatLabel}</p>
+        </div>
+        {leagueComplete && <div className="ready-badge">✓ Playoffs unlocked</div>}
+      </div>
+
+      <Standings
+        teams={state.teams}
+        standings={standings}
+        playoffView={false}
+        onTeamClick={setSelectedTeamId}
+      />
+
+      <div className="section-title-row">
+        <h3>Fixtures</h3>
+        <span>Each matchup happens once</span>
+      </div>
+
+      <div className="fixtures">
+        {Array.from({ length: 5 }, (_, roundIndex) => {
+          const roundMatches = state.matches.filter((m) => m.round === roundIndex + 1);
+          return (
+            <div className="round-block" key={roundIndex}>
+              <div className="round-label">MATCHDAY {roundIndex + 1}</div>
+              {roundMatches.map((match) => (
+                <MatchCard
+                  key={match.id}
+                  match={match}
+                  teams={state.teams}
+                  format={state.format}
+                  onSubmit={submitLeagueResult}
+                  onEdit={editLeagueResult}
+                />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TeamLeagueRecord({ team, teams, matches, formatLabel, onBack }) {
+  const teamMatches = matches.filter(
+    (match) =>
+      match.status === "completed" &&
+      match.result &&
+      (match.teamA === team.id || match.teamB === team.id)
+  );
+
+  const wins = teamMatches.filter((match) => getWinner(match.result) === team.id).length;
+  const losses = teamMatches.length - wins;
+
+  return (
+    <section className="page">
+      <div className="page-header">
+        <div>
+          <button className="ghost-btn" onClick={onBack}>
+            ← League Standings
+          </button>
+          <div className="pill" style={{ marginTop: 16 }}>LEAGUE RECORD</div>
+          <h2>{team.name}</h2>
+          <p>{team.boy} + {team.girl} • {formatLabel}</p>
+        </div>
+
+        <div className="ready-badge">
+          {wins}W • {losses}L
+        </div>
+      </div>
+
+      <div className="card standings-card">
+        <div className="section-heading">
+          <div>
+            <div className="card-title">{team.name} — League Matches</div>
+            <div className="muted">
+              League stage results only. Playoff scores are not shown or changed here.
+            </div>
+          </div>
+        </div>
+
+        <div className="record-list">
+          {teamMatches.map((match) => {
+            const teamIsA = match.teamA === team.id;
+            const opponentId = teamIsA ? match.teamB : match.teamA;
+            const opponent = teamById(teams, opponentId);
+            const winner = getWinner(match.result);
+            const won = winner === team.id;
+
+            return (
+              <div className="record-card" key={match.id}>
+                <div className="record-match-info">
+                  <span className="record-match-id">{match.id}</span>
+                  <strong>vs {opponent?.name || "TBD"}</strong>
+                  <span>{opponent?.boy} + {opponent?.girl}</span>
+                </div>
+
+                <div className="record-result">
+                  <span className={won ? "record-win" : "record-loss"}>
+                    {won ? "WIN" : "LOSS"}
+                  </span>
+
+                  {match.result.games ? (
+                    <div className="record-games">
+                      {match.result.games
+                        .filter((game) => game.a !== 0 || game.b !== 0)
+                        .map((game, index) => (
+                          <span key={index}>
+                            {teamIsA ? game.a : game.b}–{teamIsA ? game.b : game.a}
+                          </span>
+                        ))}
+                    </div>
+                  ) : (
+                    <strong className="record-score">
+                      {teamIsA
+                        ? `${match.result.scoreA}–${match.result.scoreB}`
+                        : `${match.result.scoreB}–${match.result.scoreA}`}
+                    </strong>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Standings({ teams, standings, playoffView = false, onTeamClick }) {
+  return (
+    <div className="card standings-card">
+      <div className="section-heading">
+        <div>
+          <div className="card-title">Standings</div>
+          <div className="muted">Ranked by wins → point margin → points scored</div>
+        </div>
+        <span className="live-dot">LIVE</span>
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>POS</th>
+              <th>TEAM</th>
+              <th>P</th>
+              <th>W</th>
+              <th>L</th>
+              <th>PF</th>
+              <th>PA</th>
+              <th>+/-</th>
+            </tr>
+          </thead>
+          <tbody>
+            {standings.map((row) => {
+              const team = teamById(teams, row.teamId);
+              return (
+                <tr
+                  key={row.teamId}
+                  className={
+                    playoffView
+                      ? row.position === 5
+                        ? "playoff-eliminated-row"
+                        : "playoff-qualified-row"
+                      : ""
+                  }
+                >
+                  <td><span className={row.position <= 4 ? "rank top" : "rank"}>{row.position}</span></td>
+                  <td
+                    onClick={() => onTeamClick?.(team?.id)}
+                    style={{ cursor: onTeamClick ? "pointer" : "default" }}
+                    title={onTeamClick ? `View ${team?.name} league record` : undefined}
+                  >
+                    <div className="table-team">
+                      <strong>{team?.name}</strong>
+                      <span>{team?.boy} + {team?.girl}</span>
+                    </div>
+                  </td>
+                  <td>{row.played}</td>
+                  <td className="wins">{row.wins}</td>
+                  <td>{row.losses}</td>
+                  <td>{row.pf}</td>
+                  <td>{row.pa}</td>
+                  <td className={row.margin > 0 ? "positive" : row.margin < 0 ? "negative" : ""}>
+                    {row.margin > 0 ? "+" : ""}{row.margin}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function MatchCard({ match, teams, format, onSubmit, onEdit }) {
+  const [result, setResult] = useState(() => match.result || createBlankResult(match, format));
+
+  useEffect(() => {
+    if (match.result) setResult(clone(match.result));
+  }, [match.result]);
+
+  const teamA = teamById(teams, match.teamA);
+  const teamB = teamById(teams, match.teamB);
+
+  const changeSingle = (side, amount) => {
+    setResult((prev) => ({
+      ...prev,
+      [side]: Math.max(0, prev[side] + amount)
+    }));
+  };
+
+  const changeGame = (gameIndex, side, amount) => {
+    setResult((prev) => ({
+      ...prev,
+      games: prev.games.map((g, i) =>
+        i === gameIndex ? { ...g, [side]: Math.max(0, g[side] + amount) } : g
+      )
+    }));
+  };
+
+  const winner = match.result ? getWinner(match.result) : null;
+
+  return (
+    <div className={`match-card ${match.status === "completed" ? "completed" : ""}`}>
+      <div className="match-meta">
+        <span>{match.id}</span>
+        {match.status === "completed" ? <span className="completed-label">✓ Submitted</span> : <span>Not played</span>}
+      </div>
+
+      {format === "single" ? (
+        <div className="single-score">
+          <TeamScore team={teamA} score={result.scoreA} side="scoreA" onChange={changeSingle} winner={winner === teamA?.id} />
+          <div className="vs">VS</div>
+          <TeamScore team={teamB} score={result.scoreB} side="scoreB" onChange={changeSingle} winner={winner === teamB?.id} />
+        </div>
+      ) : (
+        <div className="bo3">
+          <div className="bo3-header">
+            <span>Team</span><span>G1</span><span>G2</span><span>G3</span>
+          </div>
+          {[{ team: teamA, side: "a" }, { team: teamB, side: "b" }].map(({ team, side }) => (
+            <div className="bo3-row" key={team.id}>
+              <div className="bo3-team">{team.name}<small>{team.boy} + {team.girl}</small></div>
+              {[0, 1, 2].map((gameIndex) => (
+                <div className="mini-score" key={gameIndex}>
+                  <button onClick={() => changeGame(gameIndex, side, -1)}>−</button>
+                  <strong>{result.games[gameIndex][side]}</strong>
+                  <button onClick={() => changeGame(gameIndex, side, 1)}>+</button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {match.status === "completed" ? (
+        <div className="result-bar">
+          <span><strong>{teamLabel(teams, winner)}</strong> won</span>
+          <span>{getScoreLabel(match.result)}</span>
+          <button className="text-btn" onClick={() => onEdit(match.id)}>Edit result</button>
+        </div>
+      ) : (
+        <button className="submit-btn" onClick={() => onSubmit(match.id, result)}>
+          Submit Result
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TeamScore({ team, score, side, onChange, winner }) {
+  return (
+    <div className={`score-team ${winner ? "winner" : ""}`}>
+      <div className="score-team-name">
+        <strong>{team.name}</strong>
+        <span>{team.boy} + {team.girl}</span>
+      </div>
+      <div className="score-controls">
+        <button onClick={() => onChange(side, -1)}>−</button>
+        <strong>{score}</strong>
+        <button onClick={() => onChange(side, 1)}>+</button>
+      </div>
+    </div>
+  );
+}
+
+function Playoffs({
+  state,
+  standings,
+  submitPlayoffResult,
+  editPlayoffResult,
+  formatLabel,
+  q1,
+  eliminator,
+  q2,
+  final,
+  fifthTeam,
+  champion,
+  playoffTeams,
+  onTeamClick
+}) {
+  const complete = Boolean(champion);
+
+  return (
+    <section className="page">
+      <div className="page-header">
+        <div>
+          <div className="pill">PLAYOFFS</div>
+          <h2>{complete ? "Tournament complete 🏆" : "Playoffs"}</h2>
+          <p>{formatLabel} • Top 4 continue, 5th is eliminated</p>
+        </div>
+      </div>
+
+      {complete && (
+        <div className="champion">
+          <div className="confetti">🏆</div>
+          <div className="eyebrow">CHAMPIONS</div>
+          <h2>{teamLabel(state.teams, champion)}</h2>
+          <p>{teamMembers(state.teams, champion)}</p>
+          <div className="champion-score">{getScoreLabel(state.playoffs.final.result)}</div>
+        </div>
+      )}
+
+      <div className="bracket">
+        <div className="bracket-column">
+          <div className="bracket-heading">QUALIFIER 1</div>
+          <div className="bracket-sub">1st vs 2nd • Winner → Final</div>
+          <PlayoffMatch
+            slot="q1"
+            match={q1}
+            playoff={state.playoffs.q1}
+            teams={state.teams}
+            format={state.format}
+            onSubmit={submitPlayoffResult}
+            onEdit={editPlayoffResult}
+            disabled={!q1.teamA || !q1.teamB}
+          />
+        </div>
+
+        <div className="bracket-column">
+          <div className="bracket-heading">ELIMINATOR</div>
+          <div className="bracket-sub">3rd vs 4th • Loser out</div>
+          <PlayoffMatch
+            slot="eliminator"
+            match={eliminator}
+            playoff={state.playoffs.eliminator}
+            teams={state.teams}
+            format={state.format}
+            onSubmit={submitPlayoffResult}
+            onEdit={editPlayoffResult}
+            disabled={!eliminator.teamA || !eliminator.teamB}
+          />
+        </div>
+
+        <div className="bracket-column">
+          <div className="bracket-heading">QUALIFIER 2</div>
+          <div className="bracket-sub">Q1 loser vs Eliminator winner</div>
+          {q2 ? (
+            <PlayoffMatch
+              slot="q2"
+              match={q2}
+              playoff={state.playoffs.q2}
+              teams={state.teams}
+              format={state.format}
+              onSubmit={submitPlayoffResult}
+              onEdit={editPlayoffResult}
+            />
+          ) : (
+            <div className="locked-card">🔒 Waiting for Q1 + Eliminator</div>
+          )}
+        </div>
+
+        <div className="bracket-column final-column">
+          <div className="bracket-heading">FINAL</div>
+          <div className="bracket-sub">Winner takes the cup</div>
+          {final ? (
+            <PlayoffMatch
+              slot="final"
+              match={final}
+              playoff={state.playoffs.final}
+              teams={state.teams}
+              format={state.format}
+              onSubmit={submitPlayoffResult}
+              onEdit={editPlayoffResult}
+            />
+          ) : (
+            <div className="locked-card">🔒 Waiting for Qualifier 2</div>
+          )}
+        </div>
+      </div>
+
+      <div className="playoff-standings">
+        <div className="section-title-row">
+          <div>
+            <h3>League Stage Standings</h3>
+            <span>Click any team to view its league record</span>
+          </div>
+        </div>
+        <Standings
+          teams={state.teams}
+          standings={standings}
+          playoffView={true}
+          onTeamClick={onTeamClick}
+        />
+      </div>
+    </section>
+  );
+}
+
+function PlayoffMatch({ slot, match, playoff, teams, format, onSubmit, onEdit, disabled }) {
+  if (disabled) return <div className="locked-card">Waiting for league standings</div>;
+
+  const baseMatch = {
+    id: slot.toUpperCase(),
+    teamA: match.teamA,
+    teamB: match.teamB
+  };
+
+  return (
+    <MatchCard
+      match={{
+        ...baseMatch,
+        status: playoff?.status || "pending",
+        result: playoff?.result || null
+      }}
+      teams={teams}
+      format={format}
+      onSubmit={(id, result) => onSubmit(slot, result)}
+      onEdit={() => onEdit(slot)}
+    />
+  );
+}
+
+function teamMembers(teams, id) {
+  const team = teamById(teams, id);
+  return team ? `${team.boy} + ${team.girl}` : "";
+}
+
+export default App;
