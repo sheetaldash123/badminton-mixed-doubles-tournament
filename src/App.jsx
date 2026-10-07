@@ -392,17 +392,6 @@ function App() {
           <h1>The K-EEDA Mixed Doubles Cup <span>🏸</span></h1>
         </div>
         <div className="topbar-actions">
-          {state.stage === "playoffs" && leagueComplete && (
-            <button
-              className="ghost-btn"
-              onClick={() => {
-                setSelectedTeamId(null);
-                updateState({ stage: "league" });
-              }}
-            >
-              ← League Stage
-            </button>
-          )}
           {state.stage === "league" && leagueComplete && (
             <button
               className="ghost-btn"
@@ -423,18 +412,9 @@ function App() {
           <div className={state.stage === "setup" ? "progress-step active" : "progress-step"}>
             <span>1</span> Setup
           </div>
-          <button
-            className={(state.stage === "league" ? "progress-step active" : "progress-step") + (leagueComplete ? " clickable" : "")}
-            onClick={() => {
-              if (leagueComplete) {
-                setSelectedTeamId(null);
-                updateState({ stage: "league" });
-              }
-            }}
-            disabled={!leagueComplete && state.stage !== "league"}
-          >
+          <div className={state.stage === "league" ? "progress-step active" : "progress-step"}>
             <span>2</span> League Stage
-          </button>
+          </div>
           <button
             className={(state.stage === "playoffs" || state.stage === "complete" ? "progress-step active" : "progress-step") + (leagueComplete ? " clickable" : "")}
             onClick={() => {
