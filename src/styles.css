@@ -231,3 +231,19 @@ footer { max-width: 1220px; margin: 0 auto; padding: 20px 22px 30px; display: fl
   .bracket .vs { display: block; }
   footer { flex-wrap: wrap; text-align: center; }
 }
+
+.straight-knockout-bracket {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .straight-knockout-bracket {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .straight-knockout-bracket {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

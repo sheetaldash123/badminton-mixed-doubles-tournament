@@ -24,9 +24,8 @@ const initialState = {
   format: "single",
   matches: [],
   playoffs: {
-    q1: null,
-    eliminator: null,
-    q2: null,
+    semi1: null,
+    semi2: null,
     final: null
   }
 };
@@ -70,9 +69,12 @@ function makeRoundRobinFixtures(teams) {
       const b = slots[slots.length - 1 - i];
 
       if (a !== null && b !== null) {
+        const matchNumber = matches.length + 1;
+      
         matches.push({
-          id: `L${round + 1}-${matches.length + 1}`,
+          id: `L${round + 1}-${matchNumber}`,
           round: round + 1,
+          court: matchNumber === 1 ? "Court A" : "Court B",
           teamA: a,
           teamB: b,
           status: "pending",
@@ -241,6 +243,187 @@ function getStandings(teams, matches) {
     }));
 }
 
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function buildTournamentReport(historyRow) {
+  const tournament = historyRow.state;
+  const teams = tournament.teams || [];
+  const matches = tournament.matches || [];
+  const playoffs = tournament.playoffs || {};
+
+  const standings = getStandings(teams, matches);
+
+  const teamName = (id) => {
+    const team = teams.find((item) => item.id === id);
+    return team
+      ? `${team.name} (${team.boy} + ${team.girl})`
+      : "TBD";
+  };
+
+  const scoreText = (result) => {
+    if (!result) return "Not played";
+
+    if (result.games) {
+      return result.games
+        .filter((game) => game.a !== 0 || game.b !== 0)
+        .map((game) => `${game.a}–${game.b}`)
+        .join(", ") || "No score";
+    }
+
+    return `${result.scoreA}–${result.scoreB}`;
+  };
+
+  const resultRows = matches.map((match) => {
+    const result = match.result;
+    const winnerId = result ? getWinner(result) : null;
+
+    return `
+      <tr>
+        <td>${escapeHtml(match.round ?? "-")}</td>
+        <td>${escapeHtml(match.court || (match.id?.endsWith("-1") ? "Court A" : "Court B"))}</td>
+        <td>${escapeHtml(teamName(match.teamA))}</td>
+        <td>${escapeHtml(teamName(match.teamB))}</td>
+        <td>${escapeHtml(scoreText(result))}</td>
+        <td>${escapeHtml(result ? teamName(winnerId) : "—")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const playoffRow = (label, playoff) => {
+    const result = playoff?.result;
+
+    return `
+      <tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${escapeHtml(result ? teamName(result.teamA) : "TBD")}</td>
+        <td>${escapeHtml(result ? teamName(result.teamB) : "TBD")}</td>
+        <td>${escapeHtml(scoreText(result))}</td>
+        <td>${escapeHtml(result ? teamName(getWinner(result)) : "—")}</td>
+      </tr>
+    `;
+  };
+
+  const championId = playoffs.final?.result
+    ? getWinner(playoffs.final.result)
+    : null;
+
+  const championName = historyRow.champion ||
+    (championId ? teamName(championId) : "Not recorded");
+
+  const standingsRows = standings.map((row) => `
+    <tr>
+      <td>${row.position}</td>
+      <td>${escapeHtml(teamName(row.teamId))}</td>
+      <td>${row.played}</td>
+      <td>${row.wins}</td>
+      <td>${row.losses}</td>
+      <td>${row.pf}</td>
+      <td>${row.pa}</td>
+      <td>${row.margin > 0 ? "+" : ""}${row.margin}</td>
+    </tr>
+  `).join("");
+
+  const boys = (tournament.boys || [])
+    .filter((player) => player.name?.trim())
+    .map((player) => escapeHtml(player.name))
+    .join(", ");
+
+  const girls = (tournament.girls || [])
+    .filter((player) => player.name?.trim())
+    .map((player) => escapeHtml(player.name))
+    .join(", ");
+
+  const tournamentDate = historyRow.completed_at
+    ? new Date(historyRow.completed_at).toLocaleString("en-IN")
+    : "Date not recorded";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(historyRow.tournament_name || "Badminton Tournament")} Report</title>
+<style>
+  body { font-family: Arial, sans-serif; color: #202124; max-width: 1100px; margin: 32px auto; padding: 0 20px; line-height: 1.5; }
+  h1 { margin-bottom: 4px; }
+  h2 { margin-top: 32px; border-bottom: 2px solid #222; padding-bottom: 8px; }
+  .subtitle { color: #666; }
+  .champion { background: #f2f7e9; border: 1px solid #d8e6c6; padding: 18px; border-radius: 12px; margin: 24px 0; }
+  .champion strong { font-size: 22px; }
+  .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .meta div { background: #f5f5f5; padding: 12px; border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 9px; text-align: left; }
+  th { background: #f0f0f0; }
+  tr { break-inside: avoid; }
+  .print-button { padding: 10px 16px; border: 0; border-radius: 8px; background: #222; color: white; cursor: pointer; }
+  @media print {
+    body { margin: 0; max-width: none; }
+    .print-button { display: none; }
+    h2 { break-after: avoid; }
+    table { font-size: 10px; }
+  }
+  @media (max-width: 650px) {
+    .meta { grid-template-columns: 1fr; }
+    body { padding: 0 10px; }
+    table { font-size: 11px; }
+    th, td { padding: 6px; }
+  }
+</style>
+</head>
+<body>
+<button class="print-button" onclick="window.print()">Print / Save as PDF</button>
+<h1>${escapeHtml(historyRow.tournament_name || "Badminton Mixed Doubles Cup")}</h1>
+<p class="subtitle">Tournament Report · ${escapeHtml(tournamentDate)}</p>
+
+<div class="champion">
+  <div>🏆 TOURNAMENT CHAMPION</div>
+  <strong>${escapeHtml(championName)}</strong>
+</div>
+
+<div class="meta">
+  <div><strong>Match format</strong><br>${escapeHtml(tournament.format === "bo3" ? "Best of 3" : "Single Game")}</div>
+  <div><strong>League matches completed</strong><br>${matches.filter((match) => match.status === "completed").length} / ${matches.length}</div>
+  <div><strong>Boys</strong><br>${boys || "Not recorded"}</div>
+  <div><strong>Girls</strong><br>${girls || "Not recorded"}</div>
+</div>
+
+<h2>Final Standings</h2>
+<table>
+<thead><tr><th>Pos.</th><th>Team</th><th>Played</th><th>Wins</th><th>Losses</th><th>PF</th><th>PA</th><th>+/-</th></tr></thead>
+<tbody>${standingsRows || "<tr><td colspan='8'>No standings available</td></tr>"}</tbody>
+</table>
+
+<h2>League Stage Results</h2>
+<table>
+<thead><tr><th>Round</th><th>Court</th><th>Team A</th><th>Team B</th><th>Score</th><th>Winner</th></tr></thead>
+<tbody>${resultRows || "<tr><td colspan='6'>No league matches recorded</td></tr>"}</tbody>
+</table>
+
+<h2>Playoff Results</h2>
+<table>
+<thead><tr><th>Stage</th><th>Team A</th><th>Team B</th><th>Score</th><th>Winner</th></tr></thead>
+<tbody>
+${playoffRow("Semi-final 1", playoffs.semi1)}
+${playoffRow("Semi-final 2", playoffs.semi2)}
+${playoffRow("Grand Final", playoffs.final)}
+</tbody>
+</table>
+
+<p class="subtitle">Generated from the tournament archive.</p>
+</body>
+</html>`;
+}
+
 function isResultValid(result, format) {
   if (format === "single") {
     return (
@@ -310,6 +493,12 @@ function App() {
     clone(initialState)
   );
 
+
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+
   const [isLoading, setIsLoading] = useState(true);
 
   const [selectedTeamId, setSelectedTeamId] =
@@ -324,6 +513,9 @@ function App() {
   const [passwordInput, setPasswordInput] =
     useState("");
 
+  const [showPassword, setShowPassword] =
+    useState(false);
+
   const [passwordError, setPasswordError] =
     useState("");
 
@@ -331,6 +523,15 @@ function App() {
     useRef(false);
 
   const saveRequested = useRef(false);
+
+  const isEditModeRef = useRef(isEditMode);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [saveError, setSaveError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    isEditModeRef.current = isEditMode;
+  }, [isEditMode]);
 
   // AUTH SESSION
   // Restore admin access after page refresh.
@@ -419,11 +620,42 @@ function App() {
           data?.state &&
           Object.keys(data.state).length > 0
         ) {
-          setState(data.state);
+          const loadedState = {
+            ...data.state,
+            playoffs: {
+              // Reset the old IPL-style bracket once when migrating
+              // to the straight semi-final format.
+              ...(data.state.playoffs?.semi1 !== undefined ||
+              data.state.playoffs?.semi2 !== undefined
+                ? data.state.playoffs
+                : {
+                    semi1: null,
+                    semi2: null,
+                    final: null
+                  }),
+              semi1: data.state.playoffs?.semi1 ?? null,
+              semi2: data.state.playoffs?.semi2 ?? null,
+              final:
+                data.state.playoffs?.semi1 !== undefined ||
+                data.state.playoffs?.semi2 !== undefined
+                  ? data.state.playoffs?.final ?? null
+                  : null
+            }
+          };
+
+          if (
+            data.state.playoffs?.semi1 === undefined &&
+            data.state.playoffs?.semi2 === undefined &&
+            loadedState.stage === "complete"
+          ) {
+            loadedState.stage = "playoffs";
+          }
+
+          setState(loadedState);
 
           console.log(
             "✅ Tournament loaded from Supabase:",
-            data.state
+            loadedState
           );
         }
       } catch (error) {
@@ -440,6 +672,96 @@ function App() {
     loadTournament();
   }, []);
 
+  // AUTO-REFRESH SHARED TOURNAMENT EVERY 10 SECONDS
+  useEffect(() => {
+    if (isLoading || isEditMode) return;
+
+    let mounted = true;
+    let refreshing = false;
+
+    const refreshTournament = async () => {
+      if (
+        !mounted ||
+        refreshing ||
+        isEditModeRef.current ||
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+
+      refreshing = true;
+
+      try {
+        const { data, error } = await supabase
+          .from("tournament_state")
+          .select("state")
+          .eq("id", 1)
+          .single();
+
+        if (error) throw error;
+
+        // Never overwrite an admin's active editing session.
+        if (
+          !mounted ||
+          isEditModeRef.current ||
+          !data?.state
+        ) {
+          return;
+        }
+
+        const remoteState = data.state;
+
+        setState((currentState) => {
+          // Extra safeguard against replacing a local edit.
+          if (isEditModeRef.current) {
+            return currentState;
+          }
+
+          return {
+            ...initialState,
+            ...remoteState,
+            playoffs: {
+              semi1: remoteState.playoffs?.semi1 ?? null,
+              semi2: remoteState.playoffs?.semi2 ?? null,
+              final: remoteState.playoffs?.final ?? null
+            }
+          };
+        });
+
+        setLastRefreshed(new Date());
+      } catch (error) {
+        console.error("Auto-refresh failed:", error);
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshTournament();
+      }
+    };
+
+    const intervalId = window.setInterval(
+      refreshTournament,
+      10_000
+    );
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
+
+    return () => {
+      mounted = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
+    };
+  }, [isLoading, isEditMode]);
+
   // SAVE TOURNAMENT TO SUPABASE
   useEffect(() => {
     if (
@@ -452,50 +774,94 @@ function App() {
 
     const saveTournament = async () => {
       saveRequested.current = false;
-
-      console.log(
-        "💾 Saving tournament to Supabase...",
-        state
-      );
-
-      const { data, error } = await supabase
-        .from("tournament_state")
-        .update({
-          state,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", 1)
-        .select();
-
-      if (error) {
-        console.error(
-          "❌ Failed to save tournament:",
-          error
+      setIsSaving(true);
+      setSaveError("");
+    
+      try {
+        const { data, error } = await supabase
+          .from("tournament_state")
+          .update({
+            state,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", 1)
+          .select("id");
+    
+        if (error) throw error;
+    
+        if (!data || data.length === 0) {
+          throw new Error(
+            "No tournament row was updated. Check tournament_state and id = 1."
+          );
+        }
+    
+        console.log("Tournament saved successfully.");
+      } catch (error) {
+        console.error("Failed to save tournament:", error);
+    
+        setSaveError(
+          "Save failed. Your latest changes may not be stored in the database."
         );
-
-        return;
-      }
-
-      console.log(
-        "✅ Supabase UPDATE response:",
-        data
-      );
-
-      if (!data || data.length === 0) {
-        console.error(
-          "⚠️ UPDATE completed but affected 0 rows. " +
-            "Check that tournament_state contains a row with id = 1."
-        );
-      } else {
-        console.log(
-          "✅ tournament_state row actually updated:",
-          data[0]
-        );
+      } finally {
+        setIsSaving(false);
       }
     };
-
+    
     saveTournament();
   }, [state, isEditMode]);
+
+
+  const openPreviousReports = async () => {
+    setShowHistoryModal(true);
+    setHistoryLoading(true);
+    setHistoryError("");
+    setHistoryRows([]);
+
+    try {
+      const { data, error } = await supabase
+        .from("tournament_history")
+        .select("id, tournament_name, state, completed_at, champion")
+        .order("completed_at", { ascending: false, nullsFirst: false });
+
+      if (error) throw error;
+
+      setHistoryRows(data || []);
+    } catch (error) {
+      console.error("Failed to load tournament history:", error);
+      setHistoryError(
+        "Could not load previous tournaments. Check the tournament_history table and Supabase permissions."
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const downloadTournamentReport = (historyRow) => {
+    if (!historyRow?.state) {
+      setHistoryError("This archived tournament has no saved state.");
+      return;
+    }
+
+    const reportHtml = buildTournamentReport(historyRow);
+    const blob = new Blob([reportHtml], {
+      type: "text/html;charset=utf-8"
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    const safeName = (historyRow.tournament_name || "tournament-report")
+      .replace(/[^a-z0-9-_]+/gi, "-")
+      .replace(/^-+|-+$/g, "");
+
+    link.href = url;
+    link.download = `${safeName || "tournament-report"}.html`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    URL.revokeObjectURL(url);
+  };
 
   const standings = useMemo(
     () =>
@@ -653,9 +1019,8 @@ function App() {
       ) ||
       state.teams.length > 0 ||
       state.matches.length > 0 ||
-      state.playoffs.q1 ||
-      state.playoffs.eliminator ||
-      state.playoffs.q2 ||
+      state.playoffs.semi1 ||
+      state.playoffs.semi2 ||
       state.playoffs.final;
 
     if (!hasTournamentData) {
@@ -726,26 +1091,26 @@ function App() {
         initialState
       );
 
-      const { error: resetError } =
+      const { data: resetRows, error: resetError } =
         await supabase
           .from("tournament_state")
           .update({
             state: freshState,
-            updated_at:
-              new Date().toISOString()
+            updated_at: new Date().toISOString()
           })
-          .eq("id", 1);
+          .eq("id", 1)
+          .select("id");
 
-      if (resetError) {
+      if (resetError || !resetRows?.length) {
         console.error(
           "Failed to reset active tournament:",
           resetError
         );
 
         alert(
-          "The old tournament was safely saved to history, " +
-            "but the new tournament could not be started.\n\n" +
-            "Nothing was deleted."
+          "The old tournament was saved to history, " +
+            "but the active tournament could not be reset. " +
+            "The existing tournament has been left untouched."
         );
 
         return;
@@ -830,59 +1195,50 @@ function App() {
   };
 
   // LEAGUE RESULT
-  const submitLeagueResult = (
-    matchId,
-    result
-  ) => {
+  const submitLeagueResult = (matchId, result) => {
     if (!isEditMode) return;
-
-    if (
-      !isResultValid(
-        result,
-        state.format
-      )
-    ) {
+  
+    if (!isResultValid(result, state.format)) {
       alert(
         state.format === "single"
           ? "Enter two different scores before submitting."
           : "For Best of 3, one team must win 2 games. Leave unused games at 0–0."
       );
-
       return;
     }
-
+  
     updateState((prev) => ({
       ...prev,
-      matches: prev.matches.map(
-        (m) =>
-          m.id === matchId
-            ? {
-                ...m,
-                status: "completed",
-                result: clone(result)
-              }
-            : m
-      )
+      matches: prev.matches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              status: "completed",
+              result: clone(result)
+            }
+          : match
+      ),
+      playoffs: clone(initialState.playoffs),
+      stage: "league"
     }));
   };
-
-  // EDIT LEAGUE RESULT
-  const editLeagueResult = (
-    matchId
-  ) => {
+  
+  const editLeagueResult = (matchId) => {
     if (!isEditMode) return;
-
+  
     updateState((prev) => ({
       ...prev,
-      matches: prev.matches.map(
-        (m) =>
-          m.id === matchId
-            ? {
-                ...m,
-                status: "pending"
-              }
-            : m
-      )
+      matches: prev.matches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              status: "pending",
+              result: null
+            }
+          : match
+      ),
+      playoffs: clone(initialState.playoffs),
+      stage: "league"
     }));
   };
 
@@ -917,12 +1273,18 @@ function App() {
         [slot]: {
           status: "completed",
           result: clone(result)
-        }
+        },
+
+        ...(slot === "semi1" || slot === "semi2"
+          ? { final: null }
+          : {})
       },
 
       stage:
         slot === "final"
           ? "complete"
+          : slot === "semi1" || slot === "semi2"
+          ? "playoffs"
           : prev.stage
     }));
   };
@@ -938,13 +1300,14 @@ function App() {
 
       playoffs: {
         ...prev.playoffs,
-        [slot]: null
+        [slot]: null,
+        // A changed semi-final can invalidate the final result.
+        ...(slot === "semi1" || slot === "semi2"
+          ? { final: null }
+          : {})
       },
 
-      stage:
-        slot === "final"
-          ? "playoffs"
-          : prev.stage
+      stage: "playoffs"
     }));
   };
 
@@ -953,59 +1316,31 @@ function App() {
       .slice(0, 4)
       .map((row) => row.teamId);
 
-  const fifthTeam =
-    standings[4]?.teamId;
-
-  const q1 = {
+  const semi1 = {
     teamA: playoffTeams[0],
-    teamB: playoffTeams[1]
-  };
-
-  const eliminator = {
-    teamA: playoffTeams[2],
     teamB: playoffTeams[3]
   };
 
-  const q1Winner =
-    state.playoffs.q1?.result
-      ? getWinner(
-          state.playoffs.q1.result
-        )
+  const semi2 = {
+    teamA: playoffTeams[1],
+    teamB: playoffTeams[2]
+  };
+
+  const semi1Winner =
+    state.playoffs.semi1?.result
+      ? getWinner(state.playoffs.semi1.result)
       : null;
 
-  const q1Loser = q1Winner
-    ? q1Winner === q1.teamA
-      ? q1.teamB
-      : q1.teamA
-    : null;
-
-  const elimWinner =
-    state.playoffs.eliminator?.result
-      ? getWinner(
-          state.playoffs.eliminator.result
-        )
-      : null;
-
-  const q2 =
-    q1Loser && elimWinner
-      ? {
-          teamA: q1Loser,
-          teamB: elimWinner
-        }
-      : null;
-
-  const q2Winner =
-    state.playoffs.q2?.result
-      ? getWinner(
-          state.playoffs.q2.result
-        )
+  const semi2Winner =
+    state.playoffs.semi2?.result
+      ? getWinner(state.playoffs.semi2.result)
       : null;
 
   const final =
-    q1Winner && q2Winner
+    semi1Winner && semi2Winner
       ? {
-          teamA: q1Winner,
-          teamB: q2Winner
+          teamA: semi1Winner,
+          teamB: semi2Winner
         }
       : null;
 
@@ -1068,6 +1403,13 @@ function App() {
                 Playoffs →
               </button>
             )}
+    
+          <button
+            className="ghost-btn"
+            onClick={openPreviousReports}
+          >
+            📄 Previous Tournament Reports
+          </button>
 
           {isEditMode ? (
             <button
@@ -1207,15 +1549,11 @@ function App() {
               editPlayoffResult
             }
             formatLabel={formatLabel}
-            q1={q1}
-            eliminator={eliminator}
-            q2={q2}
+            semi1={semi1}
+            semi2={semi2}
             final={final}
-            fifthTeam={fifthTeam}
             champion={champion}
-            playoffTeams={
-              playoffTeams
-            }
+            playoffTeams={playoffTeams}
             onTeamClick={(teamId) => {
               setSelectedTeamId(
                 teamId
@@ -1238,7 +1576,11 @@ function App() {
 
         <span>
           {isEditMode
-            ? "EDIT MODE • Changes saved automatically"
+            ? isSaving
+              ? "EDIT MODE • Saving..."
+              : saveError
+              ? saveError
+              : "EDIT MODE • Changes saved automatically"
             : "VIEW ONLY • Admin access required to edit"}
         </span>
       </footer>
@@ -1287,33 +1629,67 @@ function App() {
               teams and scores.
             </p>
 
-            <input
-              type="password"
-              value={passwordInput}
-              onChange={(e) => {
-                setPasswordInput(
-                  e.target.value
-                );
-                setPasswordError("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  unlockEditMode();
-                }
-              }}
-              placeholder="Admin password"
-              autoFocus
+
+            <div
               style={{
+                display: "flex",
+                alignItems: "stretch",
+                gap: 8,
                 width: "100%",
-                boxSizing: "border-box",
-                padding: "12px 14px",
-                marginTop: 12,
-                borderRadius: 10,
-                border:
-                  "1px solid #ccc",
-                fontSize: 16
+                marginTop: 12
               }}
-            />
+            >
+              <input
+                type={showPassword ? "text" : "password"}
+                value={passwordInput}
+                onChange={(e) => {
+                  setPasswordInput(e.target.value);
+                  setPasswordError("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    unlockEditMode();
+                  }
+                }}
+                placeholder="Admin password"
+                autoFocus
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  boxSizing: "border-box",
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #ccc",
+                  fontSize: 16
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowPassword((previous) => !previous)
+                }
+                aria-label={
+                  showPassword ? "Hide password" : "Show password"
+                }
+                title={
+                  showPassword ? "Hide password" : "Show password"
+                }
+                style={{
+                  flexShrink: 0,
+                  minWidth: 48,
+                  padding: "0 12px",
+                  border: "1px solid #ccc",
+                  borderRadius: 10,
+                  background: "#fff",
+                  color: "#222",
+                  cursor: "pointer",
+                  fontSize: 20
+                }}
+              >
+                {showPassword ? "🙈" : "👁"}
+              </button>
+            </div>
 
             {passwordError && (
               <div
@@ -1368,6 +1744,140 @@ function App() {
           </div>
         </div>
       )}
+
+{showHistoryModal && (
+  <div
+    onClick={() => setShowHistoryModal(false)}
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10000,
+      background: "rgba(0,0,0,0.65)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16
+    }}
+  >
+    <div
+      className="card"
+      onClick={(event) => event.stopPropagation()}
+      style={{
+        width: "100%",
+        maxWidth: 700,
+        maxHeight: "85vh",
+        overflowY: "auto",
+        padding: 24,
+        boxSizing: "border-box"
+      }}
+    >
+      <div className="section-heading">
+        <div>
+          <div className="eyebrow">TOURNAMENT ARCHIVE</div>
+          <h2 style={{ marginTop: 8 }}>
+            Previous Tournament Reports
+          </h2>
+          <p className="muted">
+            Choose an archived tournament to download its report.
+          </p>
+        </div>
+
+        <button
+          className="ghost-btn"
+          onClick={() => setShowHistoryModal(false)}
+        >
+          ✕ Close
+        </button>
+      </div>
+
+      {historyLoading && (
+        <p>Loading tournament history...</p>
+      )}
+
+      {historyError && (
+        <p style={{ color: "#c62828" }}>
+          {historyError}
+        </p>
+      )}
+
+      {!historyLoading &&
+        !historyError &&
+        historyRows.length === 0 && (
+          <div className="card" style={{ padding: 20 }}>
+            <strong>No archived tournaments found.</strong>
+            <p className="muted">
+              Previous tournaments will appear here after they have
+              been archived using Start New Tournament.
+            </p>
+          </div>
+        )}
+
+      {!historyLoading &&
+        historyRows.map((item) => {
+          const archivedState = item.state || {};
+          const finalResult = archivedState.playoffs?.final?.result;
+          const winnerId = finalResult
+            ? getWinner(finalResult)
+            : null;
+
+          const winnerTeam = (archivedState.teams || []).find(
+            (team) => team.id === winnerId
+          );
+
+          const championName =
+            item.champion ||
+            winnerTeam?.name ||
+            (archivedState.stage === "complete"
+              ? "Champion not recorded"
+              : "Tournament incomplete");
+
+          return (
+            <div
+              className="card"
+              key={item.id}
+              style={{
+                padding: 18,
+                marginTop: 14
+              }}
+            >
+              <div className="section-heading">
+                <div>
+                  <strong>
+                    {item.tournament_name ||
+                      "Badminton Mixed Doubles Cup"}
+                  </strong>
+
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {item.completed_at
+                      ? new Date(item.completed_at).toLocaleString("en-IN")
+                      : "Completion date not recorded"}
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    🏆 {championName}
+                  </div>
+
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    {(archivedState.matches || []).filter(
+                      (match) => match.status === "completed"
+                    ).length}{" "}
+                    league matches completed
+                  </div>
+                </div>
+
+                <button
+                  className="primary-btn"
+                  onClick={() => downloadTournamentReport(item)}
+                >
+                  ⬇ Download Report
+                </button>
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  </div>
+)}
     </div>
   );
 }
@@ -2104,13 +2614,18 @@ function MatchCard({
       )
     );
 
-  useEffect(() => {
-    if (match.result) {
+    useEffect(() => {
       setResult(
-        clone(match.result)
+        match.result
+          ? clone(match.result)
+          : createBlankResult(match, format)
       );
-    }
-  }, [match.result]);
+    }, [
+      match.result,
+      match.teamA,
+      match.teamB,
+      format
+    ]);
 
   const teamA = teamById(
     teams,
@@ -2171,10 +2686,15 @@ function MatchCard({
           : ""
       }`}
     >
-      <div className="match-meta">
-        <span>
-          {match.id}
-        </span>
+    <div className="match-meta">
+      <span>
+        {match.court ||
+          (match.id.endsWith("-1")
+            ? "Court A"
+            : match.id.endsWith("-2")
+            ? "Court B"
+            : match.id)}
+      </span>
 
         {match.status ===
         "completed" ? (
@@ -2408,11 +2928,9 @@ function Playoffs({
   submitPlayoffResult,
   editPlayoffResult,
   formatLabel,
-  q1,
-  eliminator,
-  q2,
+  semi1,
+  semi2,
   final,
-  fifthTeam,
   champion,
   playoffTeams,
   onTeamClick,
@@ -2424,201 +2942,108 @@ function Playoffs({
     <section className="page">
       <div className="page-header">
         <div>
-          <div className="pill">
-            PLAYOFFS
-          </div>
+          <div className="pill">PLAYOFFS</div>
 
           <h2>
-            {complete
-              ? "Tournament complete 🏆"
-              : "Playoffs"}
+            {complete ? "Tournament complete 🏆" : "Playoffs"}
           </h2>
 
           <p>
-            {formatLabel} • Top 4 continue,
-            5th is eliminated
+            {formatLabel} • Top 4 qualify • Straight knockout
           </p>
         </div>
       </div>
 
       {complete && (
         <div className="champion">
-          <div className="confetti">
-            🏆
-          </div>
+          <div className="confetti">🏆</div>
+          <div className="eyebrow">CHAMPIONS</div>
 
-          <div className="eyebrow">
-            CHAMPIONS
-          </div>
+          <h2>{teamLabel(state.teams, champion)}</h2>
 
-          <h2>
-            {teamLabel(
-              state.teams,
-              champion
-            )}
-          </h2>
-
-          <p>
-            {teamMembers(
-              state.teams,
-              champion
-            )}
-          </p>
+          <p>{teamMembers(state.teams, champion)}</p>
 
           <div className="champion-score">
-            {getScoreLabel(
-              state.playoffs.final
-                .result
-            )}
+            {getScoreLabel(state.playoffs.final.result)}
           </div>
         </div>
       )}
 
-      <div className="bracket">
+      <div className="bracket straight-knockout-bracket">
         <div className="bracket-column">
-          <div className="bracket-heading">
-            QUALIFIER 1
-          </div>
-
-          <div className="bracket-sub">
-            1st vs 2nd • Winner → Final
-          </div>
+          <div className="bracket-heading">SEMI-FINAL 1</div>
+          <div className="bracket-sub">1st place vs 4th place</div>
 
           <PlayoffMatch
-            slot="q1"
-            match={q1}
-            playoff={
-              state.playoffs.q1
-            }
+            slot="semi1"
+            match={semi1}
+            playoff={state.playoffs.semi1}
             teams={state.teams}
             format={state.format}
-            onSubmit={
-              submitPlayoffResult
-            }
-            onEdit={
-              editPlayoffResult
-            }
+            onSubmit={submitPlayoffResult}
+            onEdit={editPlayoffResult}
             canEdit={canEdit}
-            disabled={
-              !q1.teamA ||
-              !q1.teamB
-            }
+            disabled={!semi1.teamA || !semi1.teamB}
           />
+
+          <div className="bracket-sub">
+            Winner advances to the final
+          </div>
         </div>
 
         <div className="bracket-column">
-          <div className="bracket-heading">
-            ELIMINATOR
-          </div>
-
-          <div className="bracket-sub">
-            3rd vs 4th • Loser out
-          </div>
+          <div className="bracket-heading">SEMI-FINAL 2</div>
+          <div className="bracket-sub">2nd place vs 3rd place</div>
 
           <PlayoffMatch
-            slot="eliminator"
-            match={eliminator}
-            playoff={
-              state.playoffs
-                .eliminator
-            }
+            slot="semi2"
+            match={semi2}
+            playoff={state.playoffs.semi2}
             teams={state.teams}
             format={state.format}
-            onSubmit={
-              submitPlayoffResult
-            }
-            onEdit={
-              editPlayoffResult
-            }
+            onSubmit={submitPlayoffResult}
+            onEdit={editPlayoffResult}
             canEdit={canEdit}
-            disabled={
-              !eliminator.teamA ||
-              !eliminator.teamB
-            }
+            disabled={!semi2.teamA || !semi2.teamB}
           />
-        </div>
-
-        <div className="bracket-column">
-          <div className="bracket-heading">
-            QUALIFIER 2
-          </div>
 
           <div className="bracket-sub">
-            Q1 loser vs Eliminator
-            winner
+            Winner advances to the final
           </div>
-
-          {q2 ? (
-            <PlayoffMatch
-              slot="q2"
-              match={q2}
-              playoff={
-                state.playoffs.q2
-              }
-              teams={state.teams}
-              format={state.format}
-              onSubmit={
-                submitPlayoffResult
-              }
-              onEdit={
-                editPlayoffResult
-              }
-              canEdit={canEdit}
-            />
-          ) : (
-            <div className="locked-card">
-              🔒 Waiting for Q1 +
-              Eliminator
-            </div>
-          )}
         </div>
 
         <div className="bracket-column final-column">
-          <div className="bracket-heading">
-            FINAL
-          </div>
-
-          <div className="bracket-sub">
-            Winner takes the cup
-          </div>
+          <div className="bracket-heading">GRAND FINAL</div>
+          <div className="bracket-sub">Semi-final winners face off</div>
 
           {final ? (
             <PlayoffMatch
               slot="final"
               match={final}
-              playoff={
-                state.playoffs.final
-              }
+              playoff={state.playoffs.final}
               teams={state.teams}
               format={state.format}
-              onSubmit={
-                submitPlayoffResult
-              }
-              onEdit={
-                editPlayoffResult
-              }
+              onSubmit={submitPlayoffResult}
+              onEdit={editPlayoffResult}
               canEdit={canEdit}
             />
           ) : (
             <div className="locked-card">
-              🔒 Waiting for Qualifier
-              2
+              🔒 Waiting for both semi-finals to finish
             </div>
           )}
+
+          <div className="bracket-sub">
+            Winner takes the cup 🏆
+          </div>
         </div>
       </div>
 
       <div className="playoff-standings">
         <div className="section-title-row">
           <div>
-            <h3>
-              League Stage Standings
-            </h3>
-
-            <span>
-              Click any team to view its
-              league record
-            </span>
+            <h3>League Stage Standings</h3>
+            <span>Click any team to view its league record</span>
           </div>
         </div>
 
